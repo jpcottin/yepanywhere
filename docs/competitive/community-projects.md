@@ -278,6 +278,24 @@ Tech: JavaScript, Node.js, ntfy.sh
 
 ---
 
+### claude-link
+**GitHub:** https://github.com/Qsanti/claude-link
+**Status:** New (0 stars, MIT)
+
+Telegram bridge for Claude Code — forwards messages between Telegram and the local CLI:
+- Send prompts from phone via Telegram, get Claude Code responses back
+- Voice message transcription (optional, requires OpenAI API key)
+- Commands: `/cancel`, `/new`, `/status`, `/help`
+- Uses existing Claude Code config, skills, and CLAUDE.md
+- Single-user security with restricted file permissions
+- `pip install claude-link` one-liner
+
+Tech: Python 3.10+, Telegram Bot API, PyPI
+
+**Note:** Minimal approach — no web UI, no session management, just a Telegram↔CLI pipe. Similar to touchgrass.sh and Claude-Code-Remote in the "chat app as remote control" category. No E2E encryption beyond Telegram's own transport.
+
+---
+
 ### Poirot
 **GitHub:** https://github.com/LeonardoCardoso/Poirot
 **Status:** Active (55 stars, MIT)
