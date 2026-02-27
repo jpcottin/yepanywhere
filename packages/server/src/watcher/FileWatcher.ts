@@ -317,7 +317,12 @@ export class FileWatcher {
     relativePath: string,
   ): FileChangeEvent["fileType"] {
     // Watching ~/.gemini/tmp - relativePath is {hash}/chats/session-*.json
-    if (relativePath.includes("/chats/") && relativePath.endsWith(".json")) {
+    // On Windows, path.relative() returns backslashes
+    if (
+      (relativePath.includes("/chats/") ||
+        relativePath.includes("\\chats\\")) &&
+      relativePath.endsWith(".json")
+    ) {
       return "session";
     }
     return "other";

@@ -138,8 +138,10 @@ export function loadConfig(): Config {
   const codexSessionsDir =
     process.env.CODEX_SESSIONS_DIR ??
     path.join(os.homedir(), ".codex", "sessions");
+  // Enable periodic rescan on macOS (fs.watch misses deep file writes)
+  // and Windows (fs.watch({ recursive: true }) can be unreliable for deep trees)
   const defaultCodexWatchPeriodicRescanMs =
-    process.platform === "darwin" ? 5000 : 0;
+    process.platform === "darwin" || process.platform === "win32" ? 5000 : 0;
   const codexWatchPeriodicRescanMs = Math.max(
     0,
     parseIntOrDefault(

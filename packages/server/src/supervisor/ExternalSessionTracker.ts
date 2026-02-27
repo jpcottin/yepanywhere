@@ -474,7 +474,11 @@ export class ExternalSessionTracker {
     filePath: string,
   ): Promise<{ cwd: string; timestamp: string; model?: string } | null> {
     try {
-      const content = await readFile(filePath, { encoding: "utf-8" });
+      let content = await readFile(filePath, { encoding: "utf-8" });
+      // Strip UTF-8 BOM if present (common on Windows)
+      if (content.charCodeAt(0) === 0xfeff) {
+        content = content.slice(1);
+      }
       const firstNewline = content.indexOf("\n");
       const firstLine =
         firstNewline > 0 ? content.slice(0, firstNewline) : content;

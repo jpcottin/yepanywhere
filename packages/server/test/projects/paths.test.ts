@@ -192,6 +192,34 @@ describe("Project Path Utilities", () => {
         normalizeProjectPathForDedup("/Users/user/code/deep/nested/project"),
       ).toBe("user/code/deep/nested/project");
     });
+
+    it("normalizes Windows paths with backslashes", () => {
+      expect(
+        normalizeProjectPathForDedup("C:\\Users\\pf\\Projects\\myapp"),
+      ).toBe("pf/Projects/myapp");
+    });
+
+    it("normalizes Windows paths with forward slashes", () => {
+      expect(normalizeProjectPathForDedup("C:/Users/pf/Projects/myapp")).toBe(
+        "pf/Projects/myapp",
+      );
+    });
+
+    it("matches Windows and macOS paths for same user/project", () => {
+      const win = normalizeProjectPathForDedup(
+        "C:\\Users\\kgraehl\\code\\yepanywhere",
+      );
+      const mac = normalizeProjectPathForDedup(
+        "/Users/kgraehl/code/yepanywhere",
+      );
+      expect(win).toBe(mac);
+    });
+
+    it("handles Windows drive letters case-insensitively", () => {
+      const upper = normalizeProjectPathForDedup("C:\\Users\\user\\project");
+      const lower = normalizeProjectPathForDedup("c:\\Users\\user\\project");
+      expect(upper).toBe(lower);
+    });
   });
 
   describe("readCwdFromSessionFile", () => {
@@ -263,6 +291,17 @@ describe("Project Path Utilities", () => {
         sessionFile,
         "not valid json\n" +
           '{"type":"user","cwd":"/home/user/project","message":"hello"}\n',
+      );
+
+      const cwd = await readCwdFromSessionFile(sessionFile);
+      expect(cwd).toBe("/home/user/project");
+    });
+
+    it("handles files with UTF-8 BOM", async () => {
+      const sessionFile = join(testDir, "session-bom.jsonl");
+      await writeFile(
+        sessionFile,
+        '\uFEFF{"type":"user","cwd":"/home/user/project","message":"hello"}\n',
       );
 
       const cwd = await readCwdFromSessionFile(sessionFile);

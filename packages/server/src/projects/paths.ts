@@ -123,9 +123,15 @@ export function getProjectName(projectPath: string): string {
  * normalizeProjectPathForDedup("/opt/shared/project")      // => "/opt/shared/project"
  */
 export function normalizeProjectPathForDedup(path: string): string {
-  const homeMatch = path.match(/^\/(?:Users|home)\/(.+)$/);
-  if (homeMatch?.[1]) return homeMatch[1];
-  const rootMatch = path.match(/^\/root\/(.+)$/);
+  // Normalize to forward slashes for cross-platform matching
+  const normalized = path.replace(/\\/g, "/");
+  // Unix: /Users/kgraehl/dotfiles or /home/kgraehl/dotfiles
+  const unixMatch = normalized.match(/^\/(?:Users|home)\/(.+)$/);
+  if (unixMatch?.[1]) return unixMatch[1];
+  // Windows: C:/Users/kgraehl/dotfiles (after backslash normalization)
+  const winMatch = normalized.match(/^[a-zA-Z]:\/(?:Users|home)\/(.+)$/);
+  if (winMatch?.[1]) return winMatch[1];
+  const rootMatch = normalized.match(/^\/root\/(.+)$/);
   if (rootMatch?.[1]) return `root/${rootMatch[1]}`;
   return path;
 }
@@ -184,7 +190,11 @@ export async function readCwdFromSessionFile(
     const { bytesRead } = await fd.read(buf, 0, 8192, 0);
     if (bytesRead === 0) return null;
 
-    const content = buf.toString("utf-8", 0, bytesRead);
+    let content = buf.toString("utf-8", 0, bytesRead);
+    // Strip UTF-8 BOM if present (common on Windows)
+    if (content.charCodeAt(0) === 0xfeff) {
+      content = content.slice(1);
+    }
     const lines = content.split("\n").slice(0, 20);
 
     for (const line of lines) {

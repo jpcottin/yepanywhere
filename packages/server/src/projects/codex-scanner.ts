@@ -11,10 +11,12 @@
  * when multiple callers need session data in the same request cycle.
  */
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import type { UrlProjectId } from "@yep-anywhere/shared";
+import { getLogger } from "../logging/logger.js";
 import type { Project } from "../supervisor/types.js";
 import { encodeProjectId } from "./paths.js";
 
@@ -47,6 +49,14 @@ export interface CodexScannerOptions {
 
 /** How long to cache scan results (ms) */
 const SCAN_CACHE_TTL = 5_000;
+
+/** Strip UTF-8 BOM if present (common on Windows) */
+function stripBom(str: string): string {
+  if (str.charCodeAt(0) === 0xfeff) {
+    return str.slice(1);
+  }
+  return str;
+}
 
 export class CodexSessionScanner {
   private sessionsDir: string;
@@ -150,8 +160,13 @@ export class CodexSessionScanner {
     // Recursively find all .jsonl files
     const files = await this.findJsonlFiles(this.sessionsDir);
 
+    getLogger().debug(
+      `[CodexScanner] Found ${files.length} .jsonl files in ${this.sessionsDir}`,
+    );
+
     // Read first line of each file in parallel (with concurrency limit)
     const BATCH_SIZE = 50;
+    let failCount = 0;
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
       const batch = files.slice(i, i + BATCH_SIZE);
       const results = await Promise.all(
@@ -160,8 +175,20 @@ export class CodexSessionScanner {
       for (const result of results) {
         if (result) {
           sessions.push(result);
+        } else {
+          failCount++;
         }
       }
+    }
+
+    if (files.length > 0 && sessions.length === 0) {
+      getLogger().warn(
+        `[CodexScanner] Found ${files.length} .jsonl files but parsed 0 sessions (${failCount} failed). Session files may use an unsupported format. First file: ${files[0]}`,
+      );
+    } else if (failCount > 0) {
+      getLogger().debug(
+        `[CodexScanner] Parsed ${sessions.length} sessions, ${failCount} files skipped`,
+      );
     }
 
     this.cachedScan = { result: sessions, timestamp: Date.now() };
@@ -186,8 +213,10 @@ export class CodexSessionScanner {
           files.push(fullPath);
         }
       }
-    } catch {
-      // Ignore errors (permission denied, etc.)
+    } catch (error) {
+      getLogger().debug(
+        `[CodexScanner] Error scanning directory ${dir}: ${error instanceof Error ? error.message : error}`,
+      );
     }
 
     return files;
@@ -195,20 +224,31 @@ export class CodexSessionScanner {
 
   /**
    * Read just the first line of a session file to extract metadata.
+   * Reads only the first 4KB to avoid loading large session files.
    */
   private async readSessionMeta(
     filePath: string,
   ): Promise<CodexSessionInfo | null> {
+    let fd: Awaited<ReturnType<typeof open>> | null = null;
     try {
       const stats = await stat(filePath);
 
-      // Read first line only (session_meta is always first)
-      const content = await readFile(filePath, { encoding: "utf-8" });
+      // Read only the first 4KB — session_meta is always the first line
+      fd = await open(filePath, "r");
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await fd.read(buf, 0, 4096, 0);
+      if (bytesRead === 0) {
+        getLogger().debug(`[CodexScanner] Empty file: ${filePath}`);
+        return null;
+      }
+
+      const content = stripBom(buf.toString("utf-8", 0, bytesRead));
       const firstNewline = content.indexOf("\n");
       const firstLine =
         firstNewline > 0 ? content.slice(0, firstNewline) : content;
 
       if (!firstLine.trim()) {
+        getLogger().debug(`[CodexScanner] Empty first line: ${filePath}`);
         return null;
       }
 
@@ -216,11 +256,17 @@ export class CodexSessionScanner {
 
       // Validate it's a session_meta entry
       if (parsed.type !== "session_meta" || !parsed.payload) {
+        getLogger().debug(
+          `[CodexScanner] Unexpected first line type=${parsed.type} payload=${!!parsed.payload}: ${filePath}`,
+        );
         return null;
       }
 
       const meta = parsed.payload as CodexSessionMeta;
       if (!meta.id || !meta.cwd) {
+        getLogger().debug(
+          `[CodexScanner] session_meta missing id or cwd: ${filePath}`,
+        );
         return null;
       }
 
@@ -231,8 +277,13 @@ export class CodexSessionScanner {
         timestamp: meta.timestamp,
         mtime: stats.mtimeMs,
       };
-    } catch {
+    } catch (error) {
+      getLogger().debug(
+        `[CodexScanner] Error reading ${filePath}: ${error instanceof Error ? error.message : error}`,
+      );
       return null;
+    } finally {
+      await fd?.close();
     }
   }
 }

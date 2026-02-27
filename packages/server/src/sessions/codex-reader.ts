@@ -11,7 +11,7 @@
  * Unlike Claude's DAG structure, Codex sessions are linear.
  */
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   type CodexEventMsgEntry,
@@ -41,6 +41,14 @@ import type {
   ISessionReader,
   LoadedSession,
 } from "./types.js";
+
+/** Strip UTF-8 BOM if present (common on Windows) */
+function stripBom(str: string): string {
+  if (str.charCodeAt(0) === 0xfeff) {
+    return str.slice(1);
+  }
+  return str;
+}
 
 export interface CodexSessionReaderOptions {
   /**
@@ -117,8 +125,8 @@ export class CodexSessionReader implements ISessionReader {
     if (!sessionFile) return null;
 
     try {
-      const content = await readFile(sessionFile.filePath, "utf-8");
-      const trimmed = content.trim();
+      const rawContent = await readFile(sessionFile.filePath, "utf-8");
+      const trimmed = stripBom(rawContent).trim();
 
       if (!trimmed) return null;
 
@@ -195,8 +203,8 @@ export class CodexSessionReader implements ISessionReader {
     const sessionFile = await this.findSessionFile(sessionId);
     if (!sessionFile) return null;
 
-    const content = await readFile(sessionFile.filePath, "utf-8");
-    const lines = content.trim().split("\n");
+    const rawContent = await readFile(sessionFile.filePath, "utf-8");
+    const lines = stripBom(rawContent).trim().split("\n");
 
     const entries: CodexSessionEntry[] = [];
     for (const line of lines) {
@@ -347,9 +355,17 @@ export class CodexSessionReader implements ISessionReader {
   private async readSessionMeta(
     filePath: string,
   ): Promise<CodexSessionFile | null> {
+    let fd: Awaited<ReturnType<typeof open>> | null = null;
     try {
       const stats = await stat(filePath);
-      const content = await readFile(filePath, { encoding: "utf-8" });
+
+      // Read only the first 4KB — session_meta is always the first line
+      fd = await open(filePath, "r");
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await fd.read(buf, 0, 4096, 0);
+      if (bytesRead === 0) return null;
+
+      const content = stripBom(buf.toString("utf-8", 0, bytesRead));
       const firstNewline = content.indexOf("\n");
       const firstLine =
         firstNewline > 0 ? content.slice(0, firstNewline) : content;
@@ -371,6 +387,8 @@ export class CodexSessionReader implements ISessionReader {
       };
     } catch {
       return null;
+    } finally {
+      await fd?.close();
     }
   }
 

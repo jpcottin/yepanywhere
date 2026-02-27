@@ -245,8 +245,14 @@ export class ProjectScanner {
         // (e.g., /Users/... on a Linux host). Swap to the local path
         // so new sessions can actually spawn in an existing directory.
         const localHome = homedir();
-        const existingIsLocal = existing.path.startsWith(`${localHome}/`);
-        const newIsLocal = projectPath.startsWith(`${localHome}/`);
+        const localHomePrefix = `${localHome}/`;
+        const localHomePrefixWin = `${localHome}\\`;
+        const existingIsLocal =
+          existing.path.startsWith(localHomePrefix) ||
+          existing.path.startsWith(localHomePrefixWin);
+        const newIsLocal =
+          projectPath.startsWith(localHomePrefix) ||
+          projectPath.startsWith(localHomePrefixWin);
         if (!existingIsLocal && newIsLocal) {
           existing.path = projectPath;
           existing.id = encodeProjectId(projectPath);
