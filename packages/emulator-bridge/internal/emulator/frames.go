@@ -40,14 +40,23 @@ func NewFrameSource(client *Client) *FrameSource {
 
 // Subscribe returns a channel that receives frames.
 // Slow consumers will have frames dropped (non-blocking send).
+// If a frame has already been received, it is immediately sent to the new subscriber
+// so that late-joining consumers (e.g. the encoding pipeline) don't miss the initial frame.
 func (fs *FrameSource) Subscribe() (id int, ch <-chan *Frame) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
 	id = fs.nextID
 	fs.nextID++
-	c := make(chan *Frame, 2)
+	c := make(chan *Frame, 4)
 	fs.subs[id] = c
+
+	// Replay the last frame so subscribers that join after the initial
+	// gRPC frame was received still get something to encode.
+	if last := fs.lastFrame.Load(); last != nil {
+		c <- last
+	}
+
 	return id, c
 }
 

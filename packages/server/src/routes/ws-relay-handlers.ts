@@ -941,6 +941,7 @@ export async function handleMessage(
   data: unknown,
   deps: RelayHandlerDeps,
   options: HandleMessageOptions,
+  emulatorSessions?: Set<string>,
 ): Promise<void> {
   const {
     app,
@@ -1011,9 +1012,11 @@ export async function handleMessage(
             return async (emulatorMsg: RemoteClientMessage) => {
               switch (emulatorMsg.type) {
                 case "emulator_stream_start":
+                  emulatorSessions?.add(emulatorMsg.sessionId);
                   await bridge.startStream(emulatorMsg, send);
                   break;
                 case "emulator_stream_stop":
+                  emulatorSessions?.delete(emulatorMsg.sessionId);
                   bridge.stopStream(emulatorMsg);
                   break;
                 case "emulator_webrtc_answer":
@@ -1078,6 +1081,30 @@ export async function handleMessage(
   }
 
   await routeClientMessage(msg);
+}
+
+/**
+ * Clean up emulator streaming sessions on connection close.
+ */
+export function cleanupEmulatorSessions(
+  emulatorSessions: Set<string>,
+  emulatorBridgeService?: EmulatorBridgeService,
+): void {
+  if (!emulatorBridgeService || emulatorSessions.size === 0) return;
+  for (const sessionId of emulatorSessions) {
+    try {
+      emulatorBridgeService.stopStream({
+        type: "emulator_stream_stop",
+        sessionId,
+      });
+    } catch (err) {
+      console.error(
+        `[WS Relay] Error cleaning up emulator session ${sessionId}:`,
+        err,
+      );
+    }
+  }
+  emulatorSessions.clear();
 }
 
 /**

@@ -135,6 +135,21 @@ func (sh *SignalingHandler) startPipelineLocked() {
 }
 
 func (sh *SignalingHandler) runPipeline(session *PeerSession, done chan struct{}) {
+	// Wait for WebRTC connection before encoding frames.
+	log.Println("pipeline: waiting for WebRTC connection")
+	select {
+	case <-session.Connected():
+		log.Println("pipeline: WebRTC connected")
+	case <-session.Done():
+		log.Println("pipeline: peer closed before connecting")
+		return
+	case <-done:
+		return
+	case <-time.After(30 * time.Second):
+		log.Println("pipeline: WebRTC connection timed out")
+		return
+	}
+
 	id, frames := sh.frameSource.Subscribe()
 	defer sh.frameSource.Unsubscribe(id)
 

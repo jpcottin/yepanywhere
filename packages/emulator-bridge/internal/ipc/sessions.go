@@ -230,6 +230,20 @@ func (sm *SessionManager) closeSessionLocked(sess *streamSession) {
 }
 
 func (sm *SessionManager) runPipeline(sess *streamSession) {
+	// Wait for WebRTC connection before encoding frames.
+	// Frames encoded before the connection is ready are silently dropped by Pion.
+	log.Printf("[session %s] pipeline waiting for WebRTC connection", sess.sessionID)
+	select {
+	case <-sess.peer.Connected():
+		log.Printf("[session %s] WebRTC connected, starting pipeline", sess.sessionID)
+	case <-sess.peer.Done():
+		log.Printf("[session %s] peer closed before connecting", sess.sessionID)
+		return
+	case <-time.After(30 * time.Second):
+		log.Printf("[session %s] WebRTC connection timed out", sess.sessionID)
+		return
+	}
+
 	id, frames := sess.frameSource.Subscribe()
 	defer sess.frameSource.Unsubscribe(id)
 

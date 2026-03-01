@@ -27,6 +27,7 @@ type Client struct {
 	conn   *grpc.ClientConn
 	client pb.EmulatorControllerClient
 	ctx    context.Context // carries auth metadata
+	token  string          // gRPC bearer token (for per-stream context creation)
 	width  int32
 	height int32
 }
@@ -51,6 +52,7 @@ func NewClient(addr string) (*Client, error) {
 		client: pb.NewEmulatorControllerClient(conn),
 		ctx: metadata.AppendToOutgoingContext(context.Background(),
 			"authorization", "Bearer "+token),
+		token: token,
 	}
 
 	if err := c.probeScreenSize(); err != nil {
@@ -95,7 +97,11 @@ func (c *Client) SendKey(ctx context.Context, key string) error {
 // StreamScreenshots opens a streaming gRPC call and sends frames to the returned channel.
 // The channel is closed when the context is canceled or the stream errors.
 func (c *Client) StreamScreenshots(ctx context.Context) (<-chan *Frame, error) {
-	stream, err := c.client.StreamScreenshot(c.ctx, &pb.ImageFormat{
+	// Merge the caller's context (for cancellation) with the auth metadata.
+	streamCtx := metadata.AppendToOutgoingContext(ctx,
+		"authorization", "Bearer "+c.token)
+
+	stream, err := c.client.StreamScreenshot(streamCtx, &pb.ImageFormat{
 		Format: pb.ImageFormat_RGB888,
 	})
 	if err != nil {

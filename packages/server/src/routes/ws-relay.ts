@@ -25,6 +25,7 @@ import {
   type RelayUploadState,
   type WSAdapter,
   cleanupConnectionState,
+  cleanupEmulatorSessions,
   cleanupSubscriptions,
   cleanupUploads,
   createConnectionState,
@@ -203,6 +204,8 @@ export function createWsRelayRoutes(
     const subscriptions = new Map<string, () => void>();
     // Track active uploads for this connection
     const uploads = new Map<string, RelayUploadState>();
+    // Track active emulator streaming sessions for this connection
+    const emulatorSessions = new Set<string>();
     // Message queue to serialize async message handling
     let messageQueue: Promise<void> = Promise.resolve();
     // Connection state for SRP authentication
@@ -279,6 +282,7 @@ export function createWsRelayRoutes(
             evt.data,
             handlerDeps,
             {},
+            emulatorSessions,
           ).catch((err) => {
             console.error("[WS Relay] Unexpected error:", err);
           }),
@@ -293,6 +297,9 @@ export function createWsRelayRoutes(
         cleanupUploads(uploads, uploadManager).catch((err) => {
           console.error("[WS Relay] Error cleaning up uploads:", err);
         });
+
+        // Clean up emulator streaming sessions
+        cleanupEmulatorSessions(emulatorSessions, emulatorBridgeService);
 
         // Clean up all subscriptions
         cleanupSubscriptions(subscriptions);
@@ -366,6 +373,8 @@ export function createAcceptRelayConnection(
     const subscriptions = new Map<string, () => void>();
     // Track active uploads for this connection
     const uploads = new Map<string, RelayUploadState>();
+    // Track active emulator streaming sessions for this connection
+    const emulatorSessions = new Set<string>();
     // Message queue to serialize async message handling
     let messageQueue: Promise<void> = Promise.resolve();
 
@@ -390,6 +399,7 @@ export function createAcceptRelayConnection(
           data,
           handlerDeps,
           { isBinary },
+          emulatorSessions,
         ).catch((err) => {
           console.error("[WS Relay] Unexpected error:", err);
         }),
@@ -414,6 +424,9 @@ export function createAcceptRelayConnection(
         console.error("[WS Relay] Error cleaning up uploads:", err);
       });
 
+      // Clean up emulator streaming sessions
+      cleanupEmulatorSessions(emulatorSessions, emulatorBridgeService);
+
       cleanupSubscriptions(subscriptions);
       console.log("[WS Relay] Relay connection closed");
     });
@@ -435,6 +448,7 @@ export function createAcceptRelayConnection(
         firstMessage,
         handlerDeps,
         { isBinary: firstMessageIsBinary },
+        emulatorSessions,
       ).catch((err) => {
         console.error("[WS Relay] Error processing first message:", err);
       }),

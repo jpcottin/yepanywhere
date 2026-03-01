@@ -25,6 +25,7 @@ type PeerSession struct {
 	dataChannel *webrtc.DataChannel
 	onInput     func(msg []byte)
 	closed      chan struct{}
+	connected   chan struct{} // closed when ICE reaches "connected" state
 }
 
 // NewPeerSession creates a PeerConnection with an h264 video track and a "control" DataChannel.
@@ -68,6 +69,7 @@ func NewPeerSession(stunServers []string, onInput func(msg []byte), onICE func(*
 		dataChannel: dc,
 		onInput:     onInput,
 		closed:      make(chan struct{}),
+		connected:   make(chan struct{}),
 	}
 
 	dc.OnOpen(func() {
@@ -82,9 +84,16 @@ func NewPeerSession(stunServers []string, onInput func(msg []byte), onICE func(*
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		log.Printf("ICE connection state: %s", state.String())
-		if state == webrtc.ICEConnectionStateFailed ||
-			state == webrtc.ICEConnectionStateDisconnected ||
-			state == webrtc.ICEConnectionStateClosed {
+		switch state {
+		case webrtc.ICEConnectionStateConnected, webrtc.ICEConnectionStateCompleted:
+			select {
+			case <-ps.connected:
+			default:
+				close(ps.connected)
+			}
+		case webrtc.ICEConnectionStateFailed,
+			webrtc.ICEConnectionStateDisconnected,
+			webrtc.ICEConnectionStateClosed:
 			select {
 			case <-ps.closed:
 			default:
@@ -190,6 +199,11 @@ func (ps *PeerSession) Close() error {
 		close(ps.closed)
 	}
 	return ps.pc.Close()
+}
+
+// Connected returns a channel that is closed when the ICE connection is established.
+func (ps *PeerSession) Connected() <-chan struct{} {
+	return ps.connected
 }
 
 // Done returns a channel that is closed when the peer disconnects.
