@@ -23,7 +23,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-const bridgeVersion = "0.1.0"
+var bridgeVersion = "dev"
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address (standalone mode)")

@@ -31,6 +31,7 @@ type streamSession struct {
 	cancel      context.CancelFunc
 	targetW     int
 	targetH     int
+	pipelineWg  sync.WaitGroup // tracks runPipeline goroutine lifetime
 }
 
 // SessionManager manages multiple concurrent emulator streaming sessions.
@@ -214,6 +215,7 @@ func (sm *SessionManager) HandleAnswer(sessionID, sdp string) error {
 	}
 
 	// Start encoding pipeline.
+	sess.pipelineWg.Add(1)
 	go sm.runPipeline(sess)
 
 	sm.sendState(sessionID, "connected", "")
@@ -271,15 +273,20 @@ func (sm *SessionManager) CloseAll() {
 func (sm *SessionManager) closeSessionLocked(sess *streamSession) {
 	sess.cancel()
 	sess.peer.Close()
+	// Wait for the pipeline goroutine to exit before freeing the encoder.
+	// The x264 C library will crash (SIGSEGV/SIGABRT) if the encoder is freed
+	// while a concurrent encode call is in progress.
+	sess.pipelineWg.Wait()
+	sess.enc.Close()
 	// Release shared resources via pool (ref-counted).
 	sm.pool.ReleaseFrameSource(sess.emulatorID, sess.maxWidth)
 	sm.pool.ReleaseClient(sess.emulatorID)
-	sess.enc.Close()
 	log.Printf("[session %s] closed", sess.sessionID)
 	// Note: caller must call resetIdleTimer() after deleting from sm.sessions.
 }
 
 func (sm *SessionManager) runPipeline(sess *streamSession) {
+	defer sess.pipelineWg.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[session %s] panic recovered in pipeline: %v", sess.sessionID, r)

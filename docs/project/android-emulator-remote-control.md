@@ -290,56 +290,65 @@ Touch events flow over the WebRTC DataChannel (not through the relay), so input 
 
 **Outcome:** Strategy B confirmed — the emulator's `Rtc` service doesn't exist in v36.3.10. The sidecar must handle encoding and WebRTC. All gRPC APIs (`getStatus`, `getScreenshot`, `streamScreenshot`, `sendTouch`, `sendKey`) work. gRPC auth uses a Bearer token from a per-PID discovery file. Width scaling is ignored for RGB888 — sidecar must downscale.
 
-### Phase 1 — Minimal sidecar with WebRTC
+### Phase 1 — Minimal sidecar with WebRTC ✅
 
-**Goal:** Go binary that streams emulator video to a browser via WebRTC.
+**Status:** Complete. Go sidecar at `packages/emulator-bridge/`.
 
-Steps:
-1. Scaffold the Go project (Pion, gRPC client, HTTP/WS server)
-2. Implement the encoding pipeline (Strategy A or B based on Phase 0 results)
-3. Hard-code a single emulator connection, no IPC yet
-4. Test with a local HTML page that does `new RTCPeerConnection()` — open it in a browser, see the emulator screen, tap and see touch events arrive
-5. Validate h264 hardware decode works on iOS Safari and Android Chrome
+**What was built:**
+- Pion WebRTC peer connection with trickle ICE (`internal/stream/peer.go`)
+- Strategy B encoding pipeline: gRPC frames → RGB→YUV420 (`internal/encoder/convert.go`) → x264 (`internal/encoder/h264.go`, ultrafast/zerolatency) → Pion `WriteSample`
+- Emulator gRPC client with Bearer token discovery (`internal/emulator/client.go`)
+- Frame source with subscriber fan-out and automatic pause/resume (`internal/emulator/frames.go`)
+- Touch/key input via DataChannel (`internal/stream/input.go`)
+- Standalone test mode with HTTP signaling for local browser testing
 
-**Gate:** Can we see and interact with the emulator from a browser tab with acceptable latency (<200ms)?
+### Phase 2 — IPC integration with Yep server ✅
 
-### Phase 2 — IPC integration with Yep server
+**Status:** Complete.
 
-**Goal:** Yep server spawns and communicates with the sidecar.
+**Sidecar side** (`internal/ipc/`):
+- Full REST API: `/health`, `/emulators`, `/emulators/:id/start|stop|screenshot`, `/shutdown`
+- WebSocket signaling at `/ws` (session.start/stop, webrtc.offer/answer/ice, session.state)
+- ADB discovery (`discovery.go`): `adb devices` + `emulator -list-avds` + console AVD name retrieval
+- Resource pooling (`pool.go`): ref-counted gRPC clients and frame sources shared across sessions
+- Session management (`sessions.go`): 30s idle timeout (sidecar self-exits), 15s activity timeout per session
 
-Steps:
-1. Implement the REST endpoints and WebSocket protocol in the sidecar
-2. Add sidecar lifecycle management to Yep server (spawn, port handshake, crash recovery)
-3. Proxy signaling messages: client WS ↔ server ↔ sidecar WS
-4. Add ADB discovery to the Yep server (shell out to `adb devices`, `emulator -list-avds`)
-5. Server reports `emulator` capability to clients
+**Server side** (`packages/server/src/emulator/`):
+- `EmulatorBridgeService.ts`: spawns sidecar, reads port handshake from stdout, establishes WS, exponential backoff restart (max 5 attempts)
+- REST routes proxy (`routes/emulators.ts`)
+- Signaling proxy through relay (`routes/ws-relay-handlers.ts`)
+- Capability reporting in server info (`capabilities.emulator`)
 
-**Gate:** Server can start the sidecar, list emulators, and proxy a WebRTC connection through to the client.
+### Phase 3 — Client UI ✅
 
-### Phase 3 — Client UI
+**Status:** Complete.
 
-**Goal:** Emulator tab in the Yep Anywhere client.
-
-Steps:
-1. Emulator settings section: list AVDs, status, start/stop buttons
-2. Emulator tab: `<video>` element for WebRTC stream, touch event capture, coordinate mapping
-3. On-screen Android nav buttons (back, home, recents)
-4. Connection state UI (connecting spinner, error messages, reconnect)
-5. Test the full flow: phone → relay → server → sidecar → emulator, with WebRTC P2P for media
-
-**Gate:** Full end-to-end flow works from a phone through the relay.
+**What was built:**
+- `EmulatorPage.tsx`: list view (discover/manage emulators) + stream view, `?auto` query param for auto-connect
+- `EmulatorStream.tsx`: `<video>` with touch mapping (multi-touch, pressure, coordinate scaling for letterboxing), mouse fallback for desktop
+- `EmulatorNavButtons.tsx`: Back, Home, Recents buttons via DataChannel key events
+- `useEmulatorStream.ts`: full WebRTC lifecycle (create PC, handle offer/answer/ICE via relay, connection state tracking)
+- `useEmulators.ts`: polling discovery, start/stop controls
+- `EmulatorSettings.tsx`: settings panel integration
+- Connection state UI (connecting, connected, disconnected, failed with error messages)
 
 ### Phase 4 — Distribution & polish
 
 **Goal:** Users can install and use the feature without manual steps.
 
-Steps:
-1. CI pipeline: build Go binaries for all platforms, attach to GitHub releases
-2. Auto-download logic in the Yep server
+**Done:**
+- Binary path detection in `EmulatorBridgeService` (dev path → production path at `~/.yep-anywhere/bin/emulator-bridge-{os}-{arch}`)
+- Configurable maxFps/maxWidth parameters (defaults: 30fps, 720px)
+- Screenshot REST endpoint (`/emulators/:id/screenshot` → JPEG)
+- CSS letterboxing for different aspect ratios (`object-fit: contain`)
+
+**Remaining:**
+1. CI pipeline: GitHub Actions workflow to build Go binaries for all platforms, attach to GitHub releases
+2. Auto-download logic in the Yep server (detect missing binary, fetch from release)
 3. Bundle binary in Tauri desktop app
 4. Adaptive quality/framerate based on connection quality
 5. Orientation handling (portrait/landscape switching)
-6. Screenshot capture button (single frame save)
+6. Screenshot capture button in UI (endpoint exists, needs frontend)
 
 ## Scope & Non-Goals
 
