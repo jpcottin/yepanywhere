@@ -131,32 +131,20 @@ export function useEmulatorStream(): UseEmulatorStreamResult {
 
       // ICE state tracking
       pc.oniceconnectionstatechange = () => {
-        console.log(
-          "[EmulatorStream] ICE state:",
-          pc.iceConnectionState,
-        );
+        console.log("[EmulatorStream] ICE state:", pc.iceConnectionState);
       };
 
       pc.onicegatheringstatechange = () => {
-        console.log(
-          "[EmulatorStream] ICE gathering:",
-          pc.iceGatheringState,
-        );
+        console.log("[EmulatorStream] ICE gathering:", pc.iceGatheringState);
       };
 
       pc.onsignalingstatechange = () => {
-        console.log(
-          "[EmulatorStream] Signaling state:",
-          pc.signalingState,
-        );
+        console.log("[EmulatorStream] Signaling state:", pc.signalingState);
       };
 
       // Connection state tracking
       pc.onconnectionstatechange = () => {
-        console.log(
-          "[EmulatorStream] Connection state:",
-          pc.connectionState,
-        );
+        console.log("[EmulatorStream] Connection state:", pc.connectionState);
         switch (pc.connectionState) {
           case "connected":
             setConnectionState("connected");
@@ -251,9 +239,7 @@ export function useEmulatorStream(): UseEmulatorStreamResult {
                   );
                 }
               } else {
-                console.log(
-                  "[EmulatorStream] Remote ICE gathering complete",
-                );
+                console.log("[EmulatorStream] Remote ICE gathering complete");
               }
               break;
             }
