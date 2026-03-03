@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [site-v1.5.20] - 2026-03-03
+
+### Changed
+- Remote device control post: clarify zero-dependency architecture (pre-built binaries, downloaded on demand)
+
 ## [site-v1.5.19] - 2026-03-03
 
 ### Added

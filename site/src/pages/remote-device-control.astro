@@ -46,7 +46,7 @@ import ArticleLayout from "../layouts/ArticleLayout.astro";
 
   <p>Video is peer-to-peer WebRTC &mdash; encrypted, low latency. Signaling goes through Yep's relay, but video and touch data flow directly between your dev machine and your phone. No relay bandwidth cost.</p>
 
-  <p>A Go sidecar (Pion) handles WebRTC and H264 encoding. Downloads automatically on first connect. Talks to your device over ADB, encodes frames with x264 (<code>ultrafast</code>/<code>zerolatency</code>), hardware-decoded on your phone. Touch and nav buttons go over the WebRTC data channel. Multi-touch and pressure work natively.</p>
+  <p>A Go sidecar (Pion) handles WebRTC and H264 encoding. It's a single pre-built binary, compiled on GitHub Actions for each platform &mdash; no native dependencies, no libdatachannel, no system WebRTC libraries to install. The binary downloads automatically on first connect and only when you actually use device control, so Yep Anywhere stays lightweight. It talks to your device over ADB, encodes frames with x264 (<code>ultrafast</code>/<code>zerolatency</code>), hardware-decoded on your phone. Touch and nav buttons go over the WebRTC data channel. Multi-touch and pressure work natively.</p>
 
   <p>Adaptive quality monitors packet loss and drops FPS before you notice stutter, recovers when the connection stabilizes.</p>
 
