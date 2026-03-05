@@ -79,6 +79,168 @@ export interface UseSessionMessagesResult {
   loadOlderMessages: () => Promise<void>;
 }
 
+function isCodexProvider(provider?: string): boolean {
+  return provider === "codex" || provider === "codex-oss";
+}
+
+function getMessageRole(message: Message): string {
+  const nestedRole = (message.message as { role?: unknown } | undefined)?.role;
+  if (nestedRole === "user" || nestedRole === "assistant") {
+    return nestedRole;
+  }
+  if (
+    message.role === "user" ||
+    message.role === "assistant" ||
+    message.role === "system"
+  ) {
+    return message.role;
+  }
+  return "unknown";
+}
+
+function getNestedMessageContent(message: Message): unknown {
+  return (message.message as { content?: unknown } | undefined)?.content;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(
+      ([a], [b]) => a.localeCompare(b),
+    );
+    return `{${entries.map(([k, v]) => `${k}:${stableStringify(v)}`).join(",")}}`;
+  }
+  return String(value);
+}
+
+function normalizeContentBlock(block: unknown): string {
+  if (typeof block === "string") {
+    return `text:${block}`;
+  }
+
+  if (!block || typeof block !== "object") {
+    return "";
+  }
+
+  const typedBlock = block as Record<string, unknown>;
+  const type =
+    typeof typedBlock.type === "string" ? typedBlock.type : "unknown";
+
+  switch (type) {
+    case "text":
+    case "output_text":
+      return `text:${typeof typedBlock.text === "string" ? typedBlock.text : ""}`;
+
+    case "thinking":
+      return `thinking:${typeof typedBlock.thinking === "string" ? typedBlock.thinking : ""}`;
+
+    case "tool_use":
+      return `tool_use:${typeof typedBlock.id === "string" ? typedBlock.id : ""}:${typeof typedBlock.name === "string" ? typedBlock.name : ""}:${stableStringify(typedBlock.input)}`;
+
+    case "tool_result":
+      return `tool_result:${typeof typedBlock.tool_use_id === "string" ? typedBlock.tool_use_id : ""}:${typedBlock.is_error === true ? "1" : "0"}:${typeof typedBlock.content === "string" ? typedBlock.content : stableStringify(typedBlock.content)}`;
+
+    default:
+      return `${type}:${stableStringify(typedBlock)}`;
+  }
+}
+
+function getSemanticReplayFingerprint(message: Message): string | null {
+  const content = getNestedMessageContent(message);
+
+  let normalizedContent: string;
+  if (typeof content === "string") {
+    normalizedContent = `text:${content}`;
+  } else if (Array.isArray(content)) {
+    normalizedContent = content.map(normalizeContentBlock).join("|");
+  } else {
+    return null;
+  }
+
+  if (!normalizedContent.trim()) {
+    return null;
+  }
+
+  const type = typeof message.type === "string" ? message.type : "unknown";
+  const role = getMessageRole(message);
+  return `${type}|${role}|${normalizedContent}`;
+}
+
+function isEmptyAssistantContent(message: Message): boolean {
+  if (message.type !== "assistant") {
+    return false;
+  }
+
+  const content = getNestedMessageContent(message);
+  if (typeof content === "string") {
+    return content.trim().length === 0;
+  }
+
+  if (!Array.isArray(content)) {
+    return false;
+  }
+
+  return content.every((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+
+    const typedBlock = block as Record<string, unknown>;
+    if (typedBlock.type === "text") {
+      return (
+        typeof typedBlock.text !== "string" || typedBlock.text.trim() === ""
+      );
+    }
+    if (typedBlock.type === "thinking") {
+      return (
+        typeof typedBlock.thinking !== "string" ||
+        typedBlock.thinking.trim() === ""
+      );
+    }
+    return false;
+  });
+}
+
+function hasEquivalentJsonlMessage(
+  existing: Message[],
+  incoming: Message,
+): boolean {
+  const incomingFingerprint = getSemanticReplayFingerprint(incoming);
+  if (!incomingFingerprint) {
+    return false;
+  }
+
+  const maxScan = 400;
+  const startIndex = Math.max(0, existing.length - maxScan);
+
+  for (let i = existing.length - 1; i >= startIndex; i -= 1) {
+    const candidate = existing[i];
+    if (!candidate || candidate._source !== "jsonl") {
+      continue;
+    }
+    if (getSemanticReplayFingerprint(candidate) === incomingFingerprint) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Hook for managing session messages with stream buffering.
  *
@@ -127,13 +289,31 @@ export function useSessionMessages(
     }
   }, [messages]);
 
-  // Process a buffered stream message event
-  const processStreamMessage = useCallback((incoming: Message) => {
-    setMessages((prev) => {
-      const result = mergeStreamMessage(prev, incoming);
-      return result.messages;
-    });
-  }, []);
+  // Process a stream message event.
+  // When replaying buffered startup events for Codex, suppress entries that are
+  // semantically identical to already-loaded JSONL messages but have different UUIDs.
+  const processStreamMessage = useCallback(
+    (incoming: Message, fromBufferedReplay = false) => {
+      const provider = providerRef.current;
+      const shouldApplyReplayDedupe =
+        fromBufferedReplay && isCodexProvider(provider);
+
+      setMessages((prev) => {
+        if (shouldApplyReplayDedupe) {
+          if (isEmptyAssistantContent(incoming)) {
+            return prev;
+          }
+          if (hasEquivalentJsonlMessage(prev, incoming)) {
+            return prev;
+          }
+        }
+
+        const result = mergeStreamMessage(prev, incoming);
+        return result.messages;
+      });
+    },
+    [],
+  );
 
   // Process a buffered stream subagent message
   const processStreamSubagentMessage = useCallback(
@@ -166,7 +346,7 @@ export function useSessionMessages(
     streamBufferRef.current = [];
     for (const item of buffer) {
       if (item.type === "message") {
-        processStreamMessage(item.msg);
+        processStreamMessage(item.msg, true);
       } else {
         processStreamSubagentMessage(item.msg, item.agentId);
       }

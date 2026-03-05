@@ -1972,6 +1972,7 @@ export class CodexProvider implements AgentProvider {
           messages.push({
             type: "user",
             session_id: sessionId,
+            uuid: `${uuid}-result`,
             message: {
               role: "user",
               content: [
@@ -2022,6 +2023,7 @@ export class CodexProvider implements AgentProvider {
                 {
                   type: "user",
                   session_id: sessionId,
+                  uuid: `${uuid}-result`,
                   message: {
                     role: "user",
                     content: [
@@ -2067,6 +2069,7 @@ export class CodexProvider implements AgentProvider {
           messages.push({
             type: "user",
             session_id: sessionId,
+            uuid: `${uuid}-result`,
             message: {
               role: "user",
               content: [
