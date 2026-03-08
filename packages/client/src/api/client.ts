@@ -600,7 +600,7 @@ export const api = {
 
   /**
    * Clone a session, creating a new session with the same conversation history.
-   * Currently only supported for Claude sessions.
+   * Supported for Claude and Codex sessions.
    */
   cloneSession: (projectId: string, sessionId: string, title?: string) =>
     fetchJSON<{

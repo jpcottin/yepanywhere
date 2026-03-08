@@ -66,6 +66,10 @@ export class CodexSessionScanner {
     this.sessionsDir = options.sessionsDir ?? CODEX_SESSIONS_DIR;
   }
 
+  invalidateCache(): void {
+    this.cachedScan = null;
+  }
+
   /**
    * Scan all Codex sessions and group them by project (cwd).
    * Returns projects sorted by last activity (most recent first).

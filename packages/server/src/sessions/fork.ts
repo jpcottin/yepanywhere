@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * Result of cloning a session.
@@ -120,11 +120,9 @@ export async function cloneCodexSession(
     }
   });
 
-  // Write clone next to the source file (same date directory)
-  const targetPath = join(
-    sourceFilePath.substring(0, sourceFilePath.lastIndexOf("/")),
-    `${targetId}.jsonl`,
-  );
+  // Write clone next to the source file (same date directory) using
+  // Codex's standard rollout-* naming for consistency with native files.
+  const targetPath = join(dirname(sourceFilePath), `rollout-${targetId}.jsonl`);
   await writeFile(targetPath, `${transformedLines.join("\n")}\n`, "utf-8");
 
   return {

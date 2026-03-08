@@ -9,7 +9,7 @@ export interface SessionMenuProps {
   isStarred: boolean;
   isArchived: boolean;
   hasUnread?: boolean;
-  /** Provider name - clone is only available for Claude sessions */
+  /** Provider name - used for capability checks like cloning support */
   provider?: string;
   /** Process ID if session has an active process (enables terminate option) */
   processId?: string;

@@ -1467,6 +1467,11 @@ export function createSessionsRoutes(deps: SessionsDeps): Hono {
           return c.json({ error: "Session file not found" }, 404);
         }
         result = await cloneCodexSession(filePath);
+        if (reader instanceof CodexSessionReader) {
+          reader.invalidateCache();
+        }
+        deps.codexReaderFactory?.(project.path).invalidateCache();
+        deps.codexScanner?.invalidateCache();
       } else {
         result = await cloneClaudeSession(sessionDir, sessionId);
       }

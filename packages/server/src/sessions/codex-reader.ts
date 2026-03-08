@@ -87,6 +87,11 @@ export class CodexSessionReader implements ISessionReader {
     this.projectPath = options.projectPath;
   }
 
+  invalidateCache(): void {
+    this.sessionFileCache.clear();
+    this.cacheTimestamp = 0;
+  }
+
   async listSessions(projectId: UrlProjectId): Promise<SessionSummary[]> {
     const summaries: SessionSummary[] = [];
     const sessions = await this.scanSessions();
