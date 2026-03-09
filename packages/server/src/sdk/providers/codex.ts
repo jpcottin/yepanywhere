@@ -8,6 +8,10 @@
 import { type ChildProcess, execSync, spawn } from "node:child_process";
 import type { ModelInfo } from "@yep-anywhere/shared";
 import {
+  logCodexCorrelationDebug,
+  summarizeCodexNormalizedMessage,
+} from "../../codex/correlationDebugLogger.js";
+import {
   type CodexToolCallContext,
   normalizeCodexCommandExecutionOutput,
   normalizeCodexToolInvocation,
@@ -48,6 +52,28 @@ import type {
 } from "./types.js";
 
 const log = getLogger().child({ component: "codex-provider" });
+
+function logSdkCorrelationDebug(
+  sessionId: string,
+  message: SDKMessage,
+  metadata: {
+    eventKind?: string;
+    turnId?: string;
+    itemId?: string;
+    callId?: string;
+    phase?: string;
+    sourceEvent?: string;
+    status?: string;
+  } = {},
+): void {
+  logCodexCorrelationDebug({
+    sessionId,
+    channel: "sdk",
+    authority: "transient",
+    ...metadata,
+    ...summarizeCodexNormalizedMessage(message),
+  });
+}
 
 const MODEL_CACHE_TTL_MS = 60 * 60 * 1000;
 const MODEL_LIST_TIMEOUT_MS = 8000;
@@ -1087,7 +1113,7 @@ export class CodexProvider implements AgentProvider {
         }
 
         // Emit user message with UUID from queue to enable deduplication.
-        yield logMessage({
+        const userMessage = {
           type: "user",
           uuid: message.uuid,
           session_id: sessionId,
@@ -1095,7 +1121,13 @@ export class CodexProvider implements AgentProvider {
             role: "user",
             content: userPrompt,
           },
-        } as SDKMessage);
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, userMessage, {
+          eventKind: "user_message",
+          phase: "submitted",
+          sourceEvent: "queued_input",
+        });
+        yield logMessage(userMessage);
 
         const turnStartParams: TurnStartParams = {
           threadId: sessionId,
@@ -1507,21 +1539,25 @@ export class CodexProvider implements AgentProvider {
         const params = this.asTurnCompletedNotification(notification.params);
         const turnId = params?.turn.id ?? null;
         const usage = turnId ? usageByTurnId.get(turnId) : undefined;
-
-        return [
-          {
-            type: "system",
-            subtype: "turn_complete",
-            session_id: sessionId,
-            usage: usage
-              ? {
-                  input_tokens: usage.inputTokens,
-                  output_tokens: usage.outputTokens,
-                  cached_input_tokens: usage.cachedInputTokens,
-                }
-              : undefined,
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "system",
+          subtype: "turn_complete",
+          session_id: sessionId,
+          usage: usage
+            ? {
+                input_tokens: usage.inputTokens,
+                output_tokens: usage.outputTokens,
+                cached_input_tokens: usage.cachedInputTokens,
+              }
+            : undefined,
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "turn_complete",
+          ...(turnId ? { turnId } : {}),
+          phase: "completed",
+          sourceEvent: notification.method,
+        });
+        return [message];
       }
 
       case "error": {
@@ -1534,13 +1570,17 @@ export class CodexProvider implements AgentProvider {
             ? (notification.params as { message: string }).message
             : "Codex turn failed");
 
-        return [
-          {
-            type: "error",
-            session_id: sessionId,
-            error: message,
-          } as SDKMessage,
-        ];
+        const errorEvent = {
+          type: "error",
+          session_id: sessionId,
+          error: message,
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, errorEvent, {
+          eventKind: "error",
+          phase: "emitted",
+          sourceEvent: notification.method,
+        });
+        return [errorEvent];
       }
 
       case "item/started":
@@ -1562,7 +1602,7 @@ export class CodexProvider implements AgentProvider {
           normalized,
           sessionId,
           turnId,
-          notification.method === "item/completed",
+          notification.method,
         );
       }
 
@@ -1909,43 +1949,56 @@ export class CodexProvider implements AgentProvider {
     item: NormalizedThreadItem,
     sessionId: string,
     turnId: string,
-    isComplete: boolean,
+    sourceEvent: "item/started" | "item/completed",
   ): SDKMessage[] {
+    const isComplete = sourceEvent === "item/completed";
     // Create unique UUID by combining item.id with turn ID.
     const uuid = `${item.id}-${turnId}`;
 
     switch (item.type) {
       case "reasoning": {
-        return [
-          {
-            type: "assistant",
-            session_id: sessionId,
-            uuid,
-            message: {
-              role: "assistant",
-              content: [
-                {
-                  type: "thinking",
-                  thinking: item.text,
-                },
-              ],
-            },
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "assistant",
+          session_id: sessionId,
+          uuid,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "thinking",
+                thinking: item.text,
+              },
+            ],
+          },
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "reasoning",
+          turnId,
+          itemId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+        });
+        return [message];
       }
 
       case "agent_message": {
-        return [
-          {
-            type: "assistant",
-            session_id: sessionId,
-            uuid,
-            message: {
-              role: "assistant",
-              content: item.text,
-            },
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "assistant",
+          session_id: sessionId,
+          uuid,
+          message: {
+            role: "assistant",
+            content: item.text,
+          },
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "agent_message",
+          turnId,
+          itemId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+        });
+        return [message];
       }
 
       case "command_execution": {
@@ -1961,7 +2014,7 @@ export class CodexProvider implements AgentProvider {
         };
 
         // Emit tool_use for the command
-        messages.push({
+        const toolUseMessage = {
           type: "assistant",
           session_id: sessionId,
           uuid,
@@ -1976,7 +2029,17 @@ export class CodexProvider implements AgentProvider {
               },
             ],
           },
-        } as SDKMessage);
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, toolUseMessage, {
+          eventKind: "command_execution",
+          turnId,
+          itemId: item.id,
+          callId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+          status: item.status,
+        });
+        messages.push(toolUseMessage);
 
         // If completed, emit tool_result
         if (isComplete && item.status !== "in_progress") {
@@ -2002,7 +2065,7 @@ export class CodexProvider implements AgentProvider {
             toolResultBlock.is_error = true;
           }
 
-          messages.push({
+          const toolResultMessage = {
             type: "user",
             session_id: sessionId,
             uuid: `${uuid}-result`,
@@ -2013,7 +2076,17 @@ export class CodexProvider implements AgentProvider {
             ...(normalizedResult.structured !== undefined
               ? { toolUseResult: normalizedResult.structured }
               : {}),
-          } as SDKMessage);
+          } as SDKMessage;
+          logSdkCorrelationDebug(sessionId, toolResultMessage, {
+            eventKind: "tool_result",
+            turnId,
+            itemId: item.id,
+            callId: item.id,
+            phase: "completed",
+            sourceEvent,
+            status: item.status,
+          });
+          messages.push(toolResultMessage);
         }
 
         return messages;
@@ -2031,54 +2104,74 @@ export class CodexProvider implements AgentProvider {
           editInput.file_path = singlePath;
         }
 
-        return [
-          {
-            type: "assistant",
+        const toolUseMessage = {
+          type: "assistant",
+          session_id: sessionId,
+          uuid,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: item.id,
+                name: "Edit",
+                input: editInput,
+              },
+            ],
+          },
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, toolUseMessage, {
+          eventKind: "file_change",
+          turnId,
+          itemId: item.id,
+          callId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+          status: item.status,
+        });
+
+        const messages = [toolUseMessage];
+
+        if (isComplete) {
+          const toolResultMessage = {
+            type: "user",
             session_id: sessionId,
-            uuid,
+            uuid: `${uuid}-result`,
             message: {
-              role: "assistant",
+              role: "user",
               content: [
                 {
-                  type: "tool_use",
-                  id: item.id,
-                  name: "Edit",
-                  input: editInput,
+                  type: "tool_result",
+                  tool_use_id: item.id,
+                  content:
+                    item.status === "completed"
+                      ? `File changes applied:\n${changesSummary}`
+                      : item.status === "declined"
+                        ? `File changes declined:\n${changesSummary}`
+                        : `File changes failed:\n${changesSummary}`,
                 },
               ],
             },
-          } as SDKMessage,
-          ...(isComplete
-            ? [
-                {
-                  type: "user",
-                  session_id: sessionId,
-                  uuid: `${uuid}-result`,
-                  message: {
-                    role: "user",
-                    content: [
-                      {
-                        type: "tool_result",
-                        tool_use_id: item.id,
-                        content:
-                          item.status === "completed"
-                            ? `File changes applied:\n${changesSummary}`
-                            : item.status === "declined"
-                              ? `File changes declined:\n${changesSummary}`
-                              : `File changes failed:\n${changesSummary}`,
-                      },
-                    ],
-                  },
-                } as SDKMessage,
-              ]
-            : []),
-        ];
+          } as SDKMessage;
+          logSdkCorrelationDebug(sessionId, toolResultMessage, {
+            eventKind: "tool_result",
+            turnId,
+            itemId: item.id,
+            callId: item.id,
+            phase: "completed",
+            sourceEvent,
+            status: item.status,
+          });
+          messages.push(toolResultMessage);
+        }
+
+        return messages;
       }
 
       case "mcp_tool_call": {
         const messages: SDKMessage[] = [];
 
-        messages.push({
+        const toolUseMessage = {
           type: "assistant",
           session_id: sessionId,
           uuid,
@@ -2093,10 +2186,20 @@ export class CodexProvider implements AgentProvider {
               },
             ],
           },
-        } as SDKMessage);
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, toolUseMessage, {
+          eventKind: "mcp_tool_call",
+          turnId,
+          itemId: item.id,
+          callId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+          status: item.status,
+        });
+        messages.push(toolUseMessage);
 
         if (isComplete && item.status !== "in_progress") {
-          messages.push({
+          const toolResultMessage = {
             type: "user",
             session_id: sessionId,
             uuid: `${uuid}-result`,
@@ -2113,54 +2216,83 @@ export class CodexProvider implements AgentProvider {
                 },
               ],
             },
-          } as SDKMessage);
+          } as SDKMessage;
+          logSdkCorrelationDebug(sessionId, toolResultMessage, {
+            eventKind: "tool_result",
+            turnId,
+            itemId: item.id,
+            callId: item.id,
+            phase: "completed",
+            sourceEvent,
+            status: item.status,
+          });
+          messages.push(toolResultMessage);
         }
 
         return messages;
       }
 
       case "web_search": {
-        return [
-          {
-            type: "assistant",
-            session_id: sessionId,
-            uuid,
-            message: {
-              role: "assistant",
-              content: [
-                {
-                  type: "tool_use",
-                  id: item.id,
-                  name: "WebSearch",
-                  input: { query: item.query },
-                },
-              ],
-            },
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "assistant",
+          session_id: sessionId,
+          uuid,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: item.id,
+                name: "WebSearch",
+                input: { query: item.query },
+              },
+            ],
+          },
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "web_search",
+          turnId,
+          itemId: item.id,
+          callId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+        });
+        return [message];
       }
 
       case "todo_list": {
-        return [
-          {
-            type: "system",
-            subtype: "todo_list",
-            session_id: sessionId,
-            uuid,
-            items: item.items,
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "system",
+          subtype: "todo_list",
+          session_id: sessionId,
+          uuid,
+          items: item.items,
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "todo_list",
+          turnId,
+          itemId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+        });
+        return [message];
       }
 
       case "error": {
-        return [
-          {
-            type: "error",
-            session_id: sessionId,
-            uuid,
-            error: item.message,
-          } as SDKMessage,
-        ];
+        const message = {
+          type: "error",
+          session_id: sessionId,
+          uuid,
+          error: item.message,
+        } as SDKMessage;
+        logSdkCorrelationDebug(sessionId, message, {
+          eventKind: "error",
+          turnId,
+          itemId: item.id,
+          phase: isComplete ? "completed" : "started",
+          sourceEvent,
+        });
+        return [message];
       }
 
       default:

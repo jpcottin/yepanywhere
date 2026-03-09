@@ -9,6 +9,10 @@ import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { createApp } from "./app.js";
 import { AuthService } from "./auth/AuthService.js";
+import {
+  closeCodexCorrelationDebugLogger,
+  initCodexCorrelationDebugLogger,
+} from "./codex/correlationDebugLogger.js";
 import { loadConfig } from "./config.js";
 import { DeviceBridgeService } from "./device/DeviceBridgeService.js";
 import { detectAdb } from "./device/adb.js";
@@ -155,6 +159,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     }
   }
 
+  closeCodexCorrelationDebugLogger();
   console.log("[Shutdown] Cleanup complete, exiting");
   process.exit(0);
 }
@@ -176,6 +181,7 @@ interceptConsole();
 
 // Initialize SDK message logger (if LOG_SDK_MESSAGES=true)
 initMessageLogger();
+initCodexCorrelationDebugLogger();
 
 // Log configuration for discoverability
 console.log(`[Config] Data dir: ${config.dataDir}`);

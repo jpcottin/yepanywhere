@@ -261,6 +261,135 @@ The preferred next direction is to define an explicit Codex merge contract betwe
 - server sends enough metadata that the client does less guessing
 - duplicates become idempotent by construction
 
+### Proposed merge contract
+
+The next version of this design should treat each normalized Codex message as having
+two identities:
+
+1. a transport identity
+2. a semantic correlation identity
+
+Transport identity is allowed to differ across channels. Correlation identity should
+be stable across:
+
+- live stream normalization
+- replay from in-memory history
+- persisted JSONL normalization
+
+That means the server should emit a provider-specific correlation object that the
+client can use as the primary merge key when present.
+
+Example shape:
+
+```ts
+type CodexCorrelationKey = {
+  provider: "codex" | "codex-oss";
+  turnId?: string;
+  itemId?: string;
+  callId?: string;
+  eventKind:
+    | "user_message"
+    | "assistant_message"
+    | "reasoning"
+    | "command_execution"
+    | "file_change"
+    | "mcp_tool_call"
+    | "web_search"
+    | "todo_list"
+    | "tool_result"
+    | "turn_aborted"
+    | "context_compacted";
+};
+
+type NormalizedMessageEnvelope = {
+  id: string; // transport/runtime id, may differ by channel
+  correlationKey?: CodexCorrelationKey;
+  source: "sdk" | "jsonl";
+  authority: "transient" | "durable";
+  timestamp: string;
+  replayEpoch?: string;
+};
+```
+
+The exact fields can change, but the contract matters:
+
+- `id` is for transport bookkeeping, not cross-channel identity
+- `correlationKey` is the preferred merge key
+- `authority` encodes whether the message came from the durable transcript
+- `replayEpoch` lets the client discard stale replay traffic from an older connection
+
+### Client invariants
+
+The client merge behavior should be documented as invariants, not implementation
+accidents.
+
+#### 1. Monotonic visibility
+
+Once meaningful content becomes visible, reconnect should not make it disappear unless
+the later durable transcript explicitly proves it was aborted or replaced.
+
+#### 2. Durable wins
+
+When transient stream content and durable JSONL content correlate to the same semantic
+event, the durable representation replaces or upgrades the transient one in place.
+
+#### 3. Stable order
+
+For Codex, transcript order should be determined by a single server-defined linear key.
+
+Today we approximate this with timestamps. Long term, the better rule is:
+
+- use durable order when available
+- otherwise use stream observation order within the current replay epoch
+- never let late replay reshuffle already-settled durable items
+
+#### 4. Idempotent replay
+
+Replaying the same history twice after reconnect should be a no-op after merge.
+
+#### 5. Fallback heuristics stay secondary
+
+Content-plus-timestamp matching remains a compatibility fallback only for messages
+missing correlation metadata.
+
+### Server responsibilities
+
+To support the contract above, the server should become the place where Codex-specific
+correlation is defined.
+
+Responsibilities:
+
+1. Normalize live and persisted Codex entries into the same correlation namespace.
+2. Emit replay watermarks so the client knows what overlap is expected.
+3. Tag each connection with a replay epoch or generation.
+4. Preserve eager streaming; do not wait for JSONL before subscribing.
+
+Concretely, the `connected` event is the right place to attach overlap metadata such as:
+
+- `replayEpoch`
+- `replayThroughTimestamp`
+- `jsonlThroughTimestamp` when known
+- optional `resumeSnapshotVersion`
+
+That does not make `connected` globally authoritative. It just gives the client enough
+information to reason about what it is seeing.
+
+### Why this is better than pure server serialization
+
+A fully serialized server resume step would reduce ambiguity, but it would also push
+Yep Anywhere back toward the desktop assumption that one synchronized catch-up path is
+the right UX boundary.
+
+That tradeoff is wrong for this product because the phone may:
+
+- wake briefly and sleep again
+- reconnect over a weak network
+- receive replay before REST or REST before replay
+
+So the right design is not "server decides everything before first paint." The right
+design is "server provides explicit merge semantics while preserving eager multi-source
+rendering."
+
 ### Likely improvements
 
 1. Add Codex-specific correlation metadata on the server
@@ -293,6 +422,54 @@ The preferred next direction is to define an explicit Codex merge contract betwe
 5. Replace heuristic semantic dedupe with explicit correlation where possible
 
 - content+timestamp should remain fallback behavior, not the primary identity mechanism
+
+## Phased implementation plan
+
+### Phase 1: Instrument and observe
+
+- log correlation candidates from both live and persisted Codex normalization paths
+- capture where live and JSONL entries refer to the same event but produce different IDs
+- confirm which fields are stable enough for a first correlation key
+
+### Phase 2: Add server-authored metadata
+
+- add `correlationKey` to normalized Codex messages where possible
+- add `replayEpoch` and replay watermarks to session subscription startup
+- keep existing client heuristics as fallback
+
+### Phase 3: Switch client merge precedence
+
+- prefer `correlationKey` over message ID for Codex cross-channel merge
+- treat JSONL as an in-place upgrade of existing transient entries
+- restrict semantic dedupe to correlation-missing cases
+
+### Phase 4: Test reconnect convergence explicitly
+
+The important tests are not only unit tests for merge helpers. We also need end-to-end
+cases that model reconnect churn:
+
+1. REST arrives before replay
+2. replay arrives before REST
+3. replay and incremental JSONL overlap
+4. duplicate reconnects create stale replay from an older connection
+5. durable JSONL arrives after transient stream content was already rendered
+
+The pass condition is:
+
+- no visible duplicates
+- no unstable reordering once durable content is known
+- same final transcript regardless of arrival order
+
+## Open questions
+
+1. Which Codex fields are stable enough across live app-server notifications and
+   persisted rollout entries to define `correlationKey` without guesswork?
+2. Should durable order be represented only as timestamps, or do we need an explicit
+   per-entry monotonic sequence from normalization?
+3. Can the server know `jsonlThroughTimestamp` cheaply enough on reconnect, or should
+   that remain a REST-side watermark reported separately?
+4. Are there Codex item types that should never appear as standalone transcript
+   messages and should instead remain execution metadata only?
 
 ## Non-goal
 

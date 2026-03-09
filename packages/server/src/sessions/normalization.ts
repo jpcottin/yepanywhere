@@ -23,6 +23,10 @@ import {
   isConversationEntry,
 } from "@yep-anywhere/shared";
 import {
+  logCodexCorrelationDebug,
+  summarizeCodexNormalizedMessage,
+} from "../codex/correlationDebugLogger.js";
+import {
   type CodexToolCallContext,
   canonicalizeCodexToolName,
   normalizeCodexToolInvocation,
@@ -145,7 +149,7 @@ export function normalizeSession(loaded: LoadedSession): Session {
     case "codex-oss":
       return {
         ...summary,
-        messages: convertCodexEntries(data.session.entries),
+        messages: convertCodexEntries(data.session.entries, summary.id),
       };
     case "gemini":
       return {
@@ -217,7 +221,10 @@ function convertClaudeMessage(
 
 // --- Codex Conversion Logic ---
 
-function convertCodexEntries(entries: CodexSessionEntry[]): Message[] {
+function convertCodexEntries(
+  entries: CodexSessionEntry[],
+  sessionId: string,
+): Message[] {
   const messages: Message[] = [];
   let messageIndex = 0;
   const hasResponseItemUser = hasCodexResponseItemUserMessages(entries);
@@ -231,11 +238,30 @@ function convertCodexEntries(entries: CodexSessionEntry[]): Message[] {
         toolCallContexts,
       );
       if (msg) {
+        logCodexCorrelationDebug({
+          sessionId,
+          channel: "jsonl",
+          authority: "durable",
+          entryType: entry.type,
+          payloadType: entry.payload.type,
+          eventKind: getCodexResponseEventKind(entry.payload),
+          callId: getCodexResponsePayloadCallId(entry.payload),
+          itemId: getCodexResponsePayloadItemId(entry.payload),
+          ...summarizeCodexNormalizedMessage(msg),
+        });
         messages.push(msg);
       }
     } else if (entry.type === "compacted") {
       const msg = convertCodexCompactedEntry(entry, messageIndex++);
       if (msg) {
+        logCodexCorrelationDebug({
+          sessionId,
+          channel: "jsonl",
+          authority: "durable",
+          entryType: entry.type,
+          eventKind: "context_compacted",
+          ...summarizeCodexNormalizedMessage(msg),
+        });
         messages.push(msg);
       }
     } else if (entry.type === "event_msg") {
@@ -253,6 +279,17 @@ function convertCodexEntries(entries: CodexSessionEntry[]): Message[] {
       ) {
         const msg = convertCodexEventMsg(entry, messageIndex++);
         if (msg) {
+          logCodexCorrelationDebug({
+            sessionId,
+            channel: "jsonl",
+            authority: "durable",
+            entryType: entry.type,
+            payloadType: entry.payload.type,
+            eventKind: entry.payload.type,
+            turnId: getCodexEventPayloadTurnId(entry.payload),
+            itemId: getCodexEventPayloadItemId(entry.payload),
+            ...summarizeCodexNormalizedMessage(msg),
+          });
           messages.push(msg);
         }
       }
@@ -260,6 +297,78 @@ function convertCodexEntries(entries: CodexSessionEntry[]): Message[] {
   }
 
   return messages;
+}
+
+function getCodexResponseEventKind(
+  payload: CodexResponseItemEntry["payload"],
+): string {
+  if (payload.type === "message") {
+    return payload.role === "assistant" ? "assistant_message" : "user_message";
+  }
+  return payload.type;
+}
+
+function getCodexResponsePayloadCallId(
+  payload: CodexResponseItemEntry["payload"],
+): string | undefined {
+  switch (payload.type) {
+    case "function_call":
+    case "function_call_output":
+      return payload.call_id;
+    case "custom_tool_call":
+    case "custom_tool_call_output":
+    case "web_search_call":
+      return typeof payload.call_id === "string"
+        ? payload.call_id
+        : typeof payload.id === "string"
+          ? payload.id
+          : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function getCodexResponsePayloadItemId(
+  payload: CodexResponseItemEntry["payload"],
+): string | undefined {
+  switch (payload.type) {
+    case "function_call":
+    case "function_call_output":
+      return payload.call_id;
+    case "custom_tool_call":
+    case "custom_tool_call_output":
+    case "web_search_call":
+      return typeof payload.id === "string"
+        ? payload.id
+        : typeof payload.call_id === "string"
+          ? payload.call_id
+          : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function getCodexEventPayloadTurnId(
+  payload: CodexEventMsgEntry["payload"],
+): string | undefined {
+  return "turn_id" in payload && typeof payload.turn_id === "string"
+    ? payload.turn_id
+    : undefined;
+}
+
+function getCodexEventPayloadItemId(
+  payload: CodexEventMsgEntry["payload"],
+): string | undefined {
+  if (payload.type !== "item_completed") {
+    return undefined;
+  }
+
+  if (!payload.item || typeof payload.item !== "object") {
+    return undefined;
+  }
+
+  const item = payload.item as { id?: unknown };
+  return typeof item.id === "string" ? item.id : undefined;
 }
 
 function hasCodexResponseItemUserMessages(
