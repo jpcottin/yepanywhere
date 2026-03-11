@@ -1,0 +1,19 @@
+[
+  {
+    "id": "yepanywhere",
+    "displayName": "Yep Anywhere",
+    "hostnames": ["updates.yepanywhere.com"],
+    "githubRepo": "kzahel/yepanywhere",
+    "tagPrefix": "v",
+    "tauriUpdates": false
+  },
+  {
+    "id": "yep-bridge",
+    "displayName": "Yep Bridge",
+    "hostnames": ["updates.yepanywhere.com"],
+    "githubRepo": "kzahel/yepanywhere",
+    "tagPrefix": "bridge-v",
+    "tauriUpdates": false,
+    "pathPrefix": "/bridge"
+  }
+]
